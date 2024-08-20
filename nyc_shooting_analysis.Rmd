@@ -1,0 +1,183 @@
+---
+title: "nyc_shooting_analysis"
+author: "Yuga"
+date: "2024-07-11"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### **NYC Shooting incidents data analysis**
+## SUMMARY: 
+* **Analyze the NYC shooting data and understand the patterns in crime is decreasing or increasing over the years. Identify data points which influenced the crime incidents to increase. Find correlation with time frame and special occurrences within those time frames like Covid 19 and lock-down situations and if these have any significant impact on the incidents.**
+
+## Data source: This data is from "https://data.cityofnewyork.us. It contains key data points of number of incidents. date, ime and year. Type of incidents such that if the crime involves murder. Gender and age of the victimes as well as the locations. After some exploratory analysis, i have decided to focus the analysis on time and location to find the corelation. 
+
+
+
+## 1. Installing libraries 
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(knitr)
+library(ggplot2)
+```
+
+## 2. Load historical NYC shooting data from data.gov
+```{r}
+# Load the CSV file
+url <-"https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nyc_shooting_full_data <- read_csv(url)
+
+# Preview the data types and data
+str(nyc_shooting_full_data)
+```
+
+
+## 3. Analysis 1: 
+* Analyze the crime trend over the years. User OCCUR DATE (year) and count of Incident_keys. Plot a line graph to observe the trend.
+* 3.1 **Transform data**:
+    + Change date field data type to DATE format
+    + Remove Columns not used in the analysis
+```{r remove_col}
+nyc_shooting_transformed_data <- nyc_shooting_full_data %>%
+ mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format="%m/%d/%Y"),
+         year = as.numeric(format(OCCUR_DATE, "%Y"))) %>%
+ select(
+    -LOC_OF_OCCUR_DESC, 
+    -PRECINCT, 
+    -JURISDICTION_CODE, 
+    -LOC_CLASSFCTN_DESC, 
+    -PERP_AGE_GROUP, 
+    -PERP_SEX, 
+    -PERP_RACE, 
+    -VIC_AGE_GROUP, 
+    -VIC_SEX, 
+    -VIC_RACE, 
+    -X_COORD_CD, 
+    -Y_COORD_CD, 
+    -Latitude, 
+    -Longitude, 
+    -Lon_Lat
+  )
+ 
+
+# Preview transformed and tidy data
+head(nyc_shooting_transformed_data)
+```
+    + Remove NA and NULL locations 
+```{r remove_na}
+nyc_shooting_transformed_data <- nyc_shooting_transformed_data%>%
+filter(!is.na(LOCATION_DESC) & LOCATION_DESC != "(null)")
+```
+
+    + Group incidents by year to analyze the trend over years.
+```{r bydate}
+nyc_crime_by_year <- nyc_shooting_transformed_data %>%
+  group_by(year) %>%
+  summarise(INCIDENT_KEY = n())
+```
+
+
+* 3.2 **Plot** line graph showing incidents counts over the years:
+```{r plot1}
+#plot the data as line graph using ggplot
+ggplot(nyc_crime_by_year, aes(x = year, y = INCIDENT_KEY)) +
+  geom_line() +
+  labs(title = "Crime Incidents Over Years",
+       x = "Year",
+       y = "Number of Crime Incidents") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(min(nyc_crime_by_year$year), max(nyc_crime_by_year$year), by = 1))
+```
+
+## 3.3 **Observation**: *_Crime was decreasing until 2019 and then there is a sudden increase in crime between 2020 to 2022. Covid can be one factor in the increase in crime._* 
+
+## 4. Analysis 2: 
+* Filter data for years 2019 to 2023 and location_desc to find which type of crimes saw a sudden increase. 
+
+* 4.1 **Transform data**:
+    + Filter data for years 2019 to 2023
+    + Group by Location desc to see if it was a retain crime or bank or any other specific location where there is an increase in the crime.Given these were lockdown period, specifically observe the residence crime numbers.
+    
+
+    
+* 4.2 **Plot summary table**
+```{r bargraph_by_loc}
+filtered_data <- nyc_shooting_transformed_data %>%
+  mutate(year = as.numeric(format(as.Date(OCCUR_DATE, format="%m/%d/%Y"), "%Y"))) %>%
+  filter(year >= 2019 & year <= 2023) %>%
+  group_by(year, LOCATION_DESC) %>%
+  summarize(incident_count = n()) %>%
+  arrange(year, desc(incident_count)) %>%
+  group_by(year) %>%
+  slice_max(incident_count, n = 3)  # Keep only the top 3 locations for each year
+
+# Display the bar graph
+ggplot(filtered_data, aes(x = factor(year), y = incident_count, fill = LOCATION_DESC)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Top 3 Locations by Number of Incidents and Year",
+       x = "Year",
+       y = "Incident Count",
+       fill = "Location") +
+  theme_minimal()
+```
+
+## 4.5 **Observation**: *_Crime has concentrated in housing and dwelling areas. Though we do have Null records for 2022 and 2023. But overall most of the crime is concentrated in dwellings. we can perform regression analysis to quantify the impact of the COVID period on crime incidents._*
+
+## 5. Analysis 3: Build a regression model which predicts incident_count using the variables year, residential_area, and covid_period. Adding covid period can be viewed as a bias. i am adding it based on the known fact that major part of increased incidents do fall into covid period. I want to understand if this bias makes any signifocant impact. 
+
+* 5.1 **Data prep for regression**
+```{r regression_data}
+# Data for regression analysis
+regression_data <- nyc_shooting_transformed_data %>%
+  mutate(year = as.numeric(format(as.Date(OCCUR_DATE, format="%m/%d/%Y"), "%Y")),
+         residential_area = ifelse(LOCATION_DESC %in% c("MULTI DWELL - PUBLIC HOUS", "MULTI DWELL - APT BUILD"), 1, 0),
+    covid_period = ifelse(year %in% c(2020, 2021), 1, 0)
+  ) %>%
+  filter(year >= 2015 & year <= 2023)
+
+# Aggregate data by year and location type
+aggregated_data <- regression_data %>%
+  group_by(year, residential_area, covid_period) %>%
+  summarize(incident_count = n(), .groups = 'drop')
+```
+
+* 5.2 **Plot regression**
+```{r regression_plot}
+# Fit the regression model
+model <- lm(incident_count ~ year + residential_area + covid_period, data = aggregated_data)
+summary(model)
+
+# Plot the regression results
+ggplot(aggregated_data, aes(x = year, y = incident_count, color = factor(residential_area))) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Regression Analysis of Crime Incidents Over Time",
+       x = "Year",
+       y = "Incident Count",
+       color = "Residential Area") +
+  theme_minimal()
+```
+
+## 5.3 **Observation and Biases**
+* **Bias* The analysis is on limited timeframe data and filtering out NA and NULL values from a key column(Location). A broader study of dataset studying impact of murder, time, age and race will provide more comprehensive output.
+
+* **Model observation** 
+    +Year: The positive coefficient for year suggests that incident counts tend to increase over time.
+    + Residential Area: The positive and highly significant coefficient for residential_area suggests that incidents are significantly higher in residential areas.
+    + Covid Period: The positive coefficient for covid_period suggests an increase in incidents during the COVID period, but it is not statistically significant.
+
+*   + *_Overall, the model indicates that incident counts have been increasing over the years and are higher in residential areas. Plus the incidents were somewhat higher during the COVID period. If i remove the covid period and increase the time frame of regression there is a possibility to get a different model _*
+
+
+
+S
+
